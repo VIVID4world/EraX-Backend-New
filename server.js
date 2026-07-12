@@ -22,7 +22,7 @@ import { startCodeGenerator } from './src/jobs/codeGenerator.js';
 
 // 🔍 DEBUG: Verify .env is loaded
 console.log('\n🔍 ===== SERVER STARTUP DEBUG =====');
-console.log('RESEND_API_KEY loaded:', process.env.RESEND_API_KEY ? '✅ YES' : '❌ NO');
+console.log('RESEND_API_KEY loaded:', process.env.RESEND_API_KEY ? '✅ YES' : ' NO');
 console.log('JWT_SECRET loaded:', process.env.JWT_SECRET ? '✅ YES' : '❌ NO');
 console.log('NODE_ENV:', process.env.NODE_ENV);
 console.log('FRONTEND_URL:', process.env.FRONTEND_URL);
@@ -39,8 +39,9 @@ const __dirname = path.dirname(__filename);
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
-  process.env.FRONTEND_URL,
-  'https://erax-backend-new.onrender.com'
+  'https://erax.company',  // ✅ YOUR FRONTEND
+  'https://erax-backend-new.onrender.com',
+  process.env.FRONTEND_URL
 ].filter(Boolean);
 
 app.use(cors({
