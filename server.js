@@ -57,7 +57,7 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('onrender.com')) {
       return callback(null, true);
     } else {
-      console.log('❌ CORS blocked origin:', origin);
+      console.log(' CORS blocked origin:', origin);
       return callback(new Error('Not allowed by CORS'));
     }
   },
@@ -73,9 +73,6 @@ app.use(cors({
   credentials: true,
   maxAge: 86400
 }));
-
-// ✅ Handle preflight requests explicitly
-app.options('*', cors());
 
 // =====================================================
 // MIDDLEWARE
