@@ -25,6 +25,7 @@ console.log('\n🔍 ===== SERVER STARTUP DEBUG =====');
 console.log('RESEND_API_KEY loaded:', process.env.RESEND_API_KEY ? '✅ YES' : '❌ NO');
 console.log('JWT_SECRET loaded:', process.env.JWT_SECRET ? '✅ YES' : '❌ NO');
 console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('FRONTEND_URL:', process.env.FRONTEND_URL);
 console.log('===================================\n');
 
 const app = express();
@@ -33,10 +34,33 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // =====================================================
-// ✅ CORS CONFIGURATION
+// ✅ CORS CONFIGURATION - FIXED FOR PRODUCTION
 // =====================================================
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  process.env.FRONTEND_URL,
+  'https://erax-backend-new.onrender.com'
+].filter(Boolean);
+
 app.use(cors({
-  origin: '*',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    
+    // In development, allow all origins
+    if (process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    
+    // In production, check if origin is allowed
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('onrender.com')) {
+      return callback(null, true);
+    } else {
+      console.log('❌ CORS blocked origin:', origin);
+      return callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type',
@@ -49,6 +73,9 @@ app.use(cors({
   credentials: true,
   maxAge: 86400
 }));
+
+// ✅ Handle preflight requests explicitly
+app.options('*', cors());
 
 // =====================================================
 // MIDDLEWARE
