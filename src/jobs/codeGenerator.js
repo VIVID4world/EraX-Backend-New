@@ -31,11 +31,11 @@ export const checkAndGenerateClaimCodes = async () => {
       return;
     }
     
-    // ✅ Step 2: Bulletproof Filter (Handles new, completed, AND missed days)
+    // ✅ Step 2: Bulletproof Filter (Handles new, completed, AND missed/expired days)
     const investmentsNeedingCode = allActiveInvestments.filter(inv => {
       const hasNoCode = !inv.claimCode || inv.claimCode === '';
       
-      // Check if the existing code has expired
+      // Check if the existing code has expired (prevents users from getting stuck if they miss a day)
       const isExpired = inv.codeExpiresAt && new Date(inv.codeExpiresAt) < now;
       
       // Needs a code if it has none, OR if the current one expired
@@ -126,6 +126,7 @@ export const checkAndGenerateClaimCodes = async () => {
   } catch (error) {
     console.error('\n❌ [CODE GENERATOR] Critical error:');
     console.error(`   Error: ${error.message}`);
+    console.error(`   Stack: ${error.stack}`);
   }
 };
 
