@@ -17,11 +17,11 @@ export const checkAndGenerateClaimCodes = async () => {
     
     const now = new Date();
     
-    // ✅ Step 1: Find all active investments
+    // ✅ Step 1: Find ALL active investments under 30 days
     const allActiveInvestments = await Investment.find({
       status: 'active',
       completedDays: { $lt: 30 }
-    });
+    }).populate('user', 'email fullName');
     
     console.log(`\n📊 Total active investments: ${allActiveInvestments.length}`);
     
@@ -31,41 +31,21 @@ export const checkAndGenerateClaimCodes = async () => {
       return;
     }
     
-    // ✅ Step 2: Show details of each investment
-    console.log('\n📋 Investment Details:');
-    allActiveInvestments.forEach((inv, i) => {
-      const hoursAgo = inv.codeGeneratedAt ? 
-        Math.floor((now - inv.codeGeneratedAt) / (1000 * 60 * 60)) : 'Never';
+    // ✅ Step 2: Filter in JavaScript (Much more reliable than MongoDB $exists queries)
+    const investmentsNeedingCode = allActiveInvestments.filter(inv => {
+      // If no claim code exists, it needs one
+      const hasNoCode = !inv.claimCode || inv.claimCode === '';
       
-      console.log(`\n  ${i+1}. Investment ID: ${inv._id}`);
-      console.log(`     Email: ${inv.email || 'MISSING'}`);
-      console.log(`     Day: ${inv.completedDays}/30`);
-      console.log(`     Has Code: ${inv.claimCode ? 'YES (' + inv.claimCode + ')' : 'NO'}`);
-      console.log(`     codeGeneratedAt: ${inv.codeGeneratedAt?.toLocaleString() || 'NOT SET'}`);
-      console.log(`     Hours since generation: ${hoursAgo}`);
-      console.log(`     Needs Code: ${!inv.claimCode && inv.codeGeneratedAt && inv.codeGeneratedAt <= now ? 'YES ✅' : 'NO ❌'}`);
+      // If it has never been generated, OR the last generation was in the past, it needs a new one
+      const needsNewCode = !inv.codeGeneratedAt || inv.codeGeneratedAt <= now;
+      
+      return hasNoCode && needsNewCode;
     });
-    
-    // ✅ Step 3: Find investments needing codes
-    const investmentsNeedingCode = await Investment.find({
-      status: 'active',
-      completedDays: { $lt: 30 },
-      $or: [
-        { claimCode: null },
-        { claimCode: { $exists: false } },
-        { claimCode: '' }
-      ],
-      codeGeneratedAt: { $lte: now }
-    }).populate('user', 'email fullName');
 
-    console.log(`\n🎯 Investments needing codes: ${investmentsNeedingCode.length}`);
+    console.log(`\n🎯 Investments needing codes RIGHT NOW: ${investmentsNeedingCode.length}`);
 
     if (investmentsNeedingCode.length === 0) {
       console.log('\nℹ️  No investments need codes right now.');
-      console.log('   Possible reasons:');
-      console.log('   - All investments already have codes');
-      console.log('   - Investments are less than 24 hours old');
-      console.log('   - codeGeneratedAt is in the future');
       console.log('='.repeat(70) + '\n');
       return;
     }
@@ -73,7 +53,7 @@ export const checkAndGenerateClaimCodes = async () => {
     let successCount = 0;
     let failCount = 0;
 
-    // ✅ Step 4: Process each investment
+    // ✅ Step 3: Process each investment
     for (const investment of investmentsNeedingCode) {
       try {
         console.log(`\n💰 Processing investment: ${investment._id}`);
@@ -112,7 +92,7 @@ export const checkAndGenerateClaimCodes = async () => {
         
         if (recipientEmail) {
           try {
-            console.log(`\n📧 Sending email to ${recipientEmail}...`);
+            console.log(`\n📧 Attempting to send email to: ${recipientEmail}`);
             console.log(`   Type: daily_task`);
             console.log(`   Code: ${claimCode}`);
             
@@ -122,22 +102,19 @@ export const checkAndGenerateClaimCodes = async () => {
             console.log(`   Message ID: ${result.messageId}`);
             successCount++;
           } catch (emailError) {
-            console.error(`\n❌ Email sending failed!`);
-            console.error(`   Error: ${emailError.message}`);
-            console.error(`   Stack: ${emailError.stack}`);
+            console.error(`\n❌ Email sending FAILED for ${recipientEmail}!`);
+            console.error(`   Error Message: ${emailError.message}`);
+            console.error(`   Full Error:`, emailError);
             failCount++;
           }
         } else {
           console.error(`\n⚠️  No email address found for investment ${investment._id}`);
-          console.error(`   investment.email: ${investment.email}`);
-          console.error(`   investment.user?.email: ${investment.user?.email}`);
           failCount++;
         }
 
       } catch (error) {
         console.error(`\n❌ Error processing investment ${investment._id}:`);
         console.error(`   Error: ${error.message}`);
-        console.error(`   Stack: ${error.stack}`);
         failCount++;
       }
     }
@@ -160,6 +137,7 @@ export const startCodeGenerator = () => {
   console.log('🚀 [30-DAY CHALLENGE] Daily Code Generator starting...');
   console.log('='.repeat(70));
   
+  // Production: Daily at 9:00 AM | Development: Every 20 seconds for testing
   const schedule = process.env.NODE_ENV === 'production' ? '0 9 * * *' : '*/20 * * * * *';
   
   cron.schedule(schedule, () => {
@@ -169,8 +147,6 @@ export const startCodeGenerator = () => {
   
   console.log(`✅ Code generator scheduled: ${schedule}`);
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`   Testing: Every 20 seconds`);
-  console.log(`   Production: Daily at 9:00 AM`);
   console.log('='.repeat(70));
   
   // Run immediately on startup (after 5 seconds)
