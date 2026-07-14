@@ -11,7 +11,7 @@ const generateClaimCode = () => {
 export const checkAndGenerateClaimCodes = async () => {
   try {
     console.log('\n' + '='.repeat(70));
-    console.log('🔍 [CODE GENERATOR] Starting check...');
+    console.log('🔍 [CODE GENERATOR] Starting daily check...');
     console.log('📅 Current time:', new Date().toLocaleString());
     console.log('='.repeat(70));
     
@@ -31,21 +31,21 @@ export const checkAndGenerateClaimCodes = async () => {
       return;
     }
     
-    // ✅ Step 2: Filter in JavaScript (Much more reliable than MongoDB $exists queries)
+    // ✅ Step 2: Bulletproof Filter (Handles new, completed, AND missed days)
     const investmentsNeedingCode = allActiveInvestments.filter(inv => {
-      // If no claim code exists, it needs one
       const hasNoCode = !inv.claimCode || inv.claimCode === '';
       
-      // If it has never been generated, OR the last generation was in the past, it needs a new one
-      const needsNewCode = !inv.codeGeneratedAt || inv.codeGeneratedAt <= now;
+      // Check if the existing code has expired
+      const isExpired = inv.codeExpiresAt && new Date(inv.codeExpiresAt) < now;
       
-      return hasNoCode && needsNewCode;
+      // Needs a code if it has none, OR if the current one expired
+      return hasNoCode || isExpired;
     });
 
     console.log(`\n🎯 Investments needing codes RIGHT NOW: ${investmentsNeedingCode.length}`);
 
     if (investmentsNeedingCode.length === 0) {
-      console.log('\nℹ️  No investments need codes right now.');
+      console.log('\nℹ️  No investments need codes right now. All users are up to date.');
       console.log('='.repeat(70) + '\n');
       return;
     }
@@ -58,7 +58,7 @@ export const checkAndGenerateClaimCodes = async () => {
       try {
         console.log(`\n💰 Processing investment: ${investment._id}`);
         console.log(`   User Email: ${investment.email || investment.user?.email || 'MISSING'}`);
-        console.log(`   Day: ${investment.completedDays + 1}/30`);
+        console.log(`   Current Day: ${investment.completedDays}/30`);
         
         // Generate unique code
         let claimCode;
@@ -76,15 +76,15 @@ export const checkAndGenerateClaimCodes = async () => {
           continue;
         }
 
-        // Update investment
+        // Update investment with new code
         investment.claimCode = claimCode;
         investment.codeGeneratedAt = now;
-        investment.codeExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        investment.codeExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Expires in 24 hours
         investment.interestStatus = 'code_generated';
         
         await investment.save();
 
-        console.log(`✅ Generated code: ${claimCode}`);
+        console.log(`✅ Generated new code: ${claimCode}`);
         console.log(`   Expires: ${investment.codeExpiresAt.toLocaleString()}`);
 
         // Send email
@@ -94,7 +94,6 @@ export const checkAndGenerateClaimCodes = async () => {
           try {
             console.log(`\n📧 Attempting to send email to: ${recipientEmail}`);
             console.log(`   Type: daily_task`);
-            console.log(`   Code: ${claimCode}`);
             
             const result = await sendOTPEmail(recipientEmail, claimCode, 'daily_task');
             
@@ -104,7 +103,6 @@ export const checkAndGenerateClaimCodes = async () => {
           } catch (emailError) {
             console.error(`\n❌ Email sending FAILED for ${recipientEmail}!`);
             console.error(`   Error Message: ${emailError.message}`);
-            console.error(`   Full Error:`, emailError);
             failCount++;
           }
         } else {
@@ -128,7 +126,6 @@ export const checkAndGenerateClaimCodes = async () => {
   } catch (error) {
     console.error('\n❌ [CODE GENERATOR] Critical error:');
     console.error(`   Error: ${error.message}`);
-    console.error(`   Stack: ${error.stack}`);
   }
 };
 
