@@ -11,7 +11,7 @@ const getSecureUser = async (req, res) => {
   
   const email = req.body?.email || req.query?.email;
   if (email) {
-    console.warn("⚠️ SECURITY WARNING: Using email fallback instead of JWT token!");
+    console.warn("️ SECURITY WARNING: Using email fallback instead of JWT token!");
     return await User.findOne({ email: email.toLowerCase().trim() });
   }
 
@@ -73,7 +73,7 @@ export const createInvestment = async (req, res) => {
     console.log(`💸 Balance Before: $${balanceBefore.toFixed(2)}`);
     console.log(`💸 Balance After: $${user.balances.availableLiquidity.toFixed(2)}`);
     console.log(`🔒 Locked Investment: $${user.balances.lockedInvestment.toFixed(2)}`);
-    console.log(` Total Invested: $${user.balances.totalInvested.toFixed(2)}`);
+    console.log(`💰 Total Invested: $${user.balances.totalInvested.toFixed(2)}`);
     
     const startDate = new Date();
     let expectedEndDate = new Date(startDate);
@@ -188,7 +188,6 @@ export const validateDailyCode = async (req, res) => {
       return res.status(401).json({ success: false, valid: false, message: "Authentication required" });
     }
 
-    // Validate input
     if (!code || typeof code !== 'string') {
       return res.status(200).json({ 
         success: false, 
@@ -197,7 +196,6 @@ export const validateDailyCode = async (req, res) => {
       });
     }
 
-    // ✅ Direct database lookup
     const investment = await Investment.findOne({ 
       _id: investmentId, 
       user: user._id 
@@ -211,7 +209,6 @@ export const validateDailyCode = async (req, res) => {
       });
     }
 
-    // Check if already completed
     if (investment.interestStatus === 'claimed') {
       return res.status(200).json({ 
         success: false, 
@@ -221,7 +218,6 @@ export const validateDailyCode = async (req, res) => {
       });
     }
 
-    // Check if there's a code to validate
     if (!investment.claimCode) {
       return res.status(200).json({ 
         success: false, 
@@ -231,7 +227,6 @@ export const validateDailyCode = async (req, res) => {
       });
     }
 
-    // Check if code expired
     if (investment.codeExpiresAt && new Date() > new Date(investment.codeExpiresAt)) {
       return res.status(200).json({ 
         success: false, 
@@ -241,22 +236,21 @@ export const validateDailyCode = async (req, res) => {
       });
     }
 
-    // Check if already checked in today
-    const today = new Date().setHours(0, 0, 0, 0);
-    const alreadyCheckedInToday = investment.dailyTasks.some(task => 
-      new Date(task.date).setHours(0, 0, 0, 0) === today && task.completed
+    // ✅ 20-hour rolling window (prevents timezone midnight bugs)
+    const twentyHoursAgo = new Date(Date.now() - 20 * 60 * 60 * 1000);
+    const alreadyCheckedInRecently = investment.dailyTasks.some(task => 
+      new Date(task.date) > twentyHoursAgo && task.completed
     );
     
-    if (alreadyCheckedInToday) {
+    if (alreadyCheckedInRecently) {
       return res.status(200).json({ 
         success: false, 
         valid: false, 
-        message: "You've already checked in today. Come back tomorrow!",
+        message: "You've already checked in recently. Come back later!",
         alreadyCheckedIn: true
       });
     }
 
-    // ✅ DIRECT DATABASE VALIDATION - Case insensitive, trim whitespace
     const normalizedInput = code.toUpperCase().trim();
     const normalizedStored = investment.claimCode.toUpperCase().trim();
     
@@ -291,7 +285,7 @@ export const validateDailyCode = async (req, res) => {
 };
 
 // ==========================================
-// ✅ POST /api/investment/check-in/:investmentId - WITH INSTANT NEXT CODE
+// ✅ POST /api/investment/check-in/:investmentId - WITH INSTANT NEXT CODE & TIMEZONE FIX
 // ==========================================
 export const verifyDailyCheckIn = async (req, res) => {
   try {
@@ -334,7 +328,6 @@ export const verifyDailyCheckIn = async (req, res) => {
       return res.status(400).json({ success: false, message: "Today's code has expired. Wait for a new code." });
     }
 
-    // ✅ Case-insensitive comparison with trim
     const normalizedInput = code.toUpperCase().trim();
     const normalizedStored = investment.claimCode.toUpperCase().trim();
     
@@ -342,13 +335,14 @@ export const verifyDailyCheckIn = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid daily code." });
     }
 
-    const today = new Date().setHours(0, 0, 0, 0);
-    const alreadyCheckedInToday = investment.dailyTasks.some(task => 
-      new Date(task.date).setHours(0, 0, 0, 0) === today && task.completed
+    // ✅ 20-hour rolling window (prevents timezone midnight bugs)
+    const twentyHoursAgo = new Date(Date.now() - 20 * 60 * 60 * 1000);
+    const alreadyCheckedInRecently = investment.dailyTasks.some(task => 
+      new Date(task.date) > twentyHoursAgo && task.completed
     );
     
-    if (alreadyCheckedInToday) {
-      return res.status(400).json({ success: false, message: "Already checked in today!" });
+    if (alreadyCheckedInRecently) {
+      return res.status(400).json({ success: false, message: "You've already checked in recently. Please wait before checking in again." });
     }
 
     const currentDay = investment.completedDays + 1;
@@ -377,14 +371,10 @@ export const verifyDailyCheckIn = async (req, res) => {
     investment.lastCheckInDate = new Date();
     investment.codeClaimedAt = new Date();
     
-    investment.claimCode = null; 
-    investment.codeExpiresAt = null;
-    investment.interestStatus = 'pending';
-    
     investment.totalInterestEarned = (investment.totalInterestEarned || 0) + dailyInterestAmount;
     investment.currentValue = investment.amount + investment.totalInterestEarned;
     
-    console.log(` Investment Growth:`, {
+    console.log(`📈 Investment Growth:`, {
       day: currentDay,
       principal: investment.amount,
       totalInterest: investment.totalInterestEarned.toFixed(2),
@@ -458,7 +448,7 @@ export const verifyDailyCheckIn = async (req, res) => {
       
       await user.save();
       
-      message = ` Cycle ${investment.cycleNumber} Complete! You earned $${profitAmount.toFixed(2)} profit. Your investment has automatically renewed for Cycle ${newInvestment.cycleNumber}. First code for new cycle will be available in 24 hours.`;
+      message = `🎉 Cycle ${investment.cycleNumber} Complete! You earned $${profitAmount.toFixed(2)} profit. Your investment has automatically renewed for Cycle ${newInvestment.cycleNumber}. First code for new cycle will be available in 24 hours.`;
       rewardReleased = true;
       
       console.log(`💰 PROFIT PAID: $${profitAmount.toFixed(2)} | 🔒 LOCKED: $${investment.amount.toFixed(2)} | 🔄 CYCLE: ${newInvestment.cycleNumber}`);
@@ -549,7 +539,7 @@ export const verifyDailyCheckIn = async (req, res) => {
     });
 
   } catch (error) {
-    console.error(" DAILY CHECK-IN ERROR:", error);
+    console.error("❌ DAILY CHECK-IN ERROR:", error);
     res.status(500).json({ 
       success: false, 
       message: "Failed to verify daily code",
@@ -677,7 +667,7 @@ export const getClaimCode = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Get claim code error:', error);
+    console.error(' Get claim code error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
