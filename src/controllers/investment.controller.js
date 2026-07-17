@@ -1,7 +1,7 @@
 import Investment from "../models/Investment.js";
 import User from "../models/User.js";
 import crypto from "crypto";
-import { sendInvestmentRenewalEmail } from "../config/email.js";
+import { sendInvestmentRenewalEmail, sendOTPEmail } from "../config/email.js";
 
 const getSecureUser = async (req, res) => {
   if (req.user?.id) {
@@ -73,7 +73,7 @@ export const createInvestment = async (req, res) => {
     console.log(`💸 Balance Before: $${balanceBefore.toFixed(2)}`);
     console.log(`💸 Balance After: $${user.balances.availableLiquidity.toFixed(2)}`);
     console.log(`🔒 Locked Investment: $${user.balances.lockedInvestment.toFixed(2)}`);
-    console.log(`💰 Total Invested: $${user.balances.totalInvested.toFixed(2)}`);
+    console.log(` Total Invested: $${user.balances.totalInvested.toFixed(2)}`);
     
     const startDate = new Date();
     let expectedEndDate = new Date(startDate);
@@ -291,7 +291,7 @@ export const validateDailyCode = async (req, res) => {
 };
 
 // ==========================================
-// ✅ POST /api/investment/check-in/:investmentId - WITH DAILY INTEREST
+// ✅ POST /api/investment/check-in/:investmentId - WITH INSTANT NEXT CODE
 // ==========================================
 export const verifyDailyCheckIn = async (req, res) => {
   try {
@@ -381,15 +381,10 @@ export const verifyDailyCheckIn = async (req, res) => {
     investment.codeExpiresAt = null;
     investment.interestStatus = 'pending';
     
-    const nextCodeGenerationTime = new Date(new Date().getTime() + 24 * 60 * 60 * 1000);
-    investment.codeGeneratedAt = nextCodeGenerationTime;
-    
-    console.log(`📅 Next code will be generated at: ${nextCodeGenerationTime.toLocaleString()}`);
-    
     investment.totalInterestEarned = (investment.totalInterestEarned || 0) + dailyInterestAmount;
     investment.currentValue = investment.amount + investment.totalInterestEarned;
     
-    console.log(`📈 Investment Growth:`, {
+    console.log(` Investment Growth:`, {
       day: currentDay,
       principal: investment.amount,
       totalInterest: investment.totalInterestEarned.toFixed(2),
@@ -400,8 +395,10 @@ export const verifyDailyCheckIn = async (req, res) => {
     let rewardReleased = false;
     let newInvestment = null;
     let dailyGrowth = null;
+    let nextCodeSent = false;
 
     if (investment.completedDays >= investment.totalDays) {
+      // ✅ CYCLE COMPLETE - Auto-renewal logic
       const profitAmount = investment.interestAmount;
       
       user.balances.availableLiquidity = (user.balances?.availableLiquidity || 0) + profitAmount;
@@ -461,7 +458,7 @@ export const verifyDailyCheckIn = async (req, res) => {
       
       await user.save();
       
-      message = `🎉 Cycle ${investment.cycleNumber} Complete! You earned $${profitAmount.toFixed(2)} profit. Your investment has automatically renewed for Cycle ${newInvestment.cycleNumber}. First code for new cycle will be available in 24 hours.`;
+      message = ` Cycle ${investment.cycleNumber} Complete! You earned $${profitAmount.toFixed(2)} profit. Your investment has automatically renewed for Cycle ${newInvestment.cycleNumber}. First code for new cycle will be available in 24 hours.`;
       rewardReleased = true;
       
       console.log(`💰 PROFIT PAID: $${profitAmount.toFixed(2)} | 🔒 LOCKED: $${investment.amount.toFixed(2)} | 🔄 CYCLE: ${newInvestment.cycleNumber}`);
@@ -482,8 +479,38 @@ export const verifyDailyCheckIn = async (req, res) => {
       }
       
     } else {
-      message = `✅ Checked in successfully! Day ${investment.completedDays}/${investment.totalDays} completed. Your investment grew by $${dailyInterestAmount.toFixed(2)} today! Next code will be available in 24 hours.`;
+      // ✅ NOT COMPLETE - INSTANTLY GENERATE NEXT DAY'S CODE
+      const nextCode = generateClaimCode();
+      const now = new Date();
+      const nextCodeExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      
+      investment.claimCode = nextCode;
+      investment.codeGeneratedAt = now;
+      investment.codeExpiresAt = nextCodeExpiresAt;
+      investment.interestStatus = 'code_generated';
+      
       await investment.save();
+      
+      console.log(` INSTANTLY generating next code: ${nextCode}`);
+      console.log(`   Next code expires: ${nextCodeExpiresAt.toLocaleString()}`);
+      
+      // ✅ INSTANTLY EMAIL THE NEXT CODE
+      try {
+        await sendOTPEmail(user.email, nextCode, 'daily_task');
+        console.log(`✅ Next day code emailed to ${user.email}`);
+        nextCodeSent = true;
+      } catch (emailError) {
+        console.error("❌ Failed to send next code email:", emailError.message);
+        nextCodeSent = false;
+      }
+      
+      message = `✅ Checked in successfully! Day ${investment.completedDays}/${investment.totalDays} completed. Your investment grew by $${dailyInterestAmount.toFixed(2)} today!`;
+      
+      if (nextCodeSent) {
+        message += ` 📧 Your code for Day ${investment.completedDays + 1} has been sent to your email!`;
+      } else {
+        message += ` Next code will be available in 24 hours.`;
+      }
       
       dailyGrowth = {
         dailyInterestEarned: dailyInterestAmount,
@@ -505,6 +532,7 @@ export const verifyDailyCheckIn = async (req, res) => {
       targetDays: investment.totalDays,
       cycleNumber: investment.cycleNumber,
       dailyGrowth,
+      nextCodeSent,
       newInvestment: newInvestment ? {
         id: newInvestment._id,
         transactionId: newInvestment.transactionId,
@@ -521,7 +549,7 @@ export const verifyDailyCheckIn = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ DAILY CHECK-IN ERROR:", error);
+    console.error(" DAILY CHECK-IN ERROR:", error);
     res.status(500).json({ 
       success: false, 
       message: "Failed to verify daily code",
@@ -662,5 +690,5 @@ export default {
   getUserInvestments,
   verifyDailyCheckIn,
   getClaimCode,
-  validateDailyCode  // ✅ NEW
+  validateDailyCode
 };
