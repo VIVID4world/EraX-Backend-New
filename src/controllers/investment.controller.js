@@ -356,12 +356,17 @@ export const verifyDailyCheckIn = async (req, res) => {
       });
     }
 
-    // ✅ Now check if the code they entered matches the (fresh) code
+    // ✅ DEBUG: Check exactly what is being compared
     const normalizedInput = code.toUpperCase().trim();
     const normalizedStored = investment.claimCode.toUpperCase().trim();
     
+    console.log(`🔍 CODE MATCH CHECK:`);
+    console.log(`   Submitted by user : "${normalizedInput}"`);
+    console.log(`   Stored in database: "${normalizedStored}"`);
+    console.log(`   Exact match?      : ${normalizedInput === normalizedStored}`);
+
     if (normalizedInput !== normalizedStored) {
-      return res.status(400).json({ success: false, message: "Invalid daily code." });
+      return res.status(400).json({ success: false, message: "Invalid daily code. Please check your email for the latest code." });
     }
 
     // ✅ 20-hour rolling window (prevents timezone midnight bugs)
