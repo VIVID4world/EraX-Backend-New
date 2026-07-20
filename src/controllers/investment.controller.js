@@ -11,7 +11,7 @@ const getSecureUser = async (req, res) => {
   
   const email = req.body?.email || req.query?.email;
   if (email) {
-    console.warn("️ SECURITY WARNING: Using email fallback instead of JWT token!");
+    console.warn("⚠️ SECURITY WARNING: Using email fallback instead of JWT token!");
     return await User.findOne({ email: email.toLowerCase().trim() });
   }
 
@@ -285,7 +285,7 @@ export const validateDailyCode = async (req, res) => {
 };
 
 // ==========================================
-// ✅ POST /api/investment/check-in/:investmentId - WITH INSTANT NEXT CODE & TIMEZONE FIX
+// ✅ POST /api/investment/check-in/:investmentId - WITH ON-DEMAND CODE GENERATION FIX
 // ==========================================
 export const verifyDailyCheckIn = async (req, res) => {
   try {
@@ -320,14 +320,43 @@ export const verifyDailyCheckIn = async (req, res) => {
       return res.status(400).json({ success: false, message: "Reward already released!" });
     }
 
+    // ✅ FIX 1: If no code exists, generate one INSTANTLY instead of blocking them
     if (!investment.claimCode) {
-      return res.status(400).json({ success: false, message: "No daily code available yet. Wait for the next code generation." });
+      const newCode = generateClaimCode();
+      const now = new Date();
+      investment.claimCode = newCode;
+      investment.codeGeneratedAt = now;
+      investment.codeExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      await investment.save();
+      
+      // Send email in the background
+      sendOTPEmail(user.email, newCode, 'daily_task').catch(err => console.error("Email failed:", err));
+      
+      return res.status(400).json({ 
+        success: false, 
+        message: "No code was available. A new code has just been sent to your email. Please check your inbox and try again." 
+      });
     }
 
+    // ✅ FIX 2: If code is expired, generate a new one INSTANTLY instead of making them wait
     if (investment.codeExpiresAt && new Date() > new Date(investment.codeExpiresAt)) {
-      return res.status(400).json({ success: false, message: "Today's code has expired. Wait for a new code." });
+      const newCode = generateClaimCode();
+      const now = new Date();
+      investment.claimCode = newCode;
+      investment.codeGeneratedAt = now;
+      investment.codeExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      await investment.save();
+      
+      // Send email in the background
+      sendOTPEmail(user.email, newCode, 'daily_task').catch(err => console.error("Email failed:", err));
+      
+      return res.status(400).json({ 
+        success: false, 
+        message: "Your previous code expired. A new code has just been sent to your email. Please check your inbox and try again." 
+      });
     }
 
+    // ✅ Now check if the code they entered matches the (fresh) code
     const normalizedInput = code.toUpperCase().trim();
     const normalizedStored = investment.claimCode.toUpperCase().trim();
     
@@ -481,7 +510,7 @@ export const verifyDailyCheckIn = async (req, res) => {
       
       await investment.save();
       
-      console.log(` INSTANTLY generating next code: ${nextCode}`);
+      console.log(`⚡ INSTANTLY generating next code: ${nextCode}`);
       console.log(`   Next code expires: ${nextCodeExpiresAt.toLocaleString()}`);
       
       // ✅ INSTANTLY EMAIL THE NEXT CODE
@@ -667,7 +696,7 @@ export const getClaimCode = async (req, res) => {
     });
 
   } catch (error) {
-    console.error(' Get claim code error:', error);
+    console.error('❌ Get claim code error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
