@@ -1,5 +1,5 @@
 import User from "../models/User.js";
-import Deposit from "../models/Deposit.js"; // ✅ CHANGED from DepositRequest
+import Deposit from "../models/Deposit.js";
 import Withdrawal from "../models/Withdrawal.js";
 import Investment from "../models/Investment.js";
 import bcrypt from 'bcryptjs';
@@ -185,7 +185,7 @@ export const createUserByAdmin = async (req, res) => {
     // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
     if (existingUser) {
-      console.log('⚠️ User already exists:', email);
+      console.log('️ User already exists:', email);
       return res.status(400).json({
         success: false,
         message: 'User already exists with this email',
@@ -217,7 +217,7 @@ export const createUserByAdmin = async (req, res) => {
       verifiedAt: isVerified ? new Date() : null,
       balances: {
         availableLiquidity: 0,
-        lockedInvestment: 0, // ✅ NEW
+        lockedInvestment: 0,
         totalDeposited: 0,
         totalWithdrawn: 0,
         netProfitLoss: 0,
@@ -352,11 +352,14 @@ export const updateUserByAdmin = async (req, res) => {
       user.twoStep = twoStep;
     }
 
+    // ✅ NEW: Track difference in locked investment to instantly top-up ongoing investment
+    let lockedInvestmentDiff = 0;
+
     // Update financial balances
     if (balances && typeof balances === 'object') {
       const balanceFields = [
         'availableLiquidity',
-        'lockedInvestment', // ✅ NEW
+        'lockedInvestment',
         'totalDeposited',
         'totalWithdrawn',
         'netProfitLoss',
@@ -369,6 +372,11 @@ export const updateUserByAdmin = async (req, res) => {
           const oldValue = user.balances[field] || 0;
           const newValue = parseFloat(balances[field]) || 0;
           
+          // ✅ Track if locked investment was manually increased by admin
+          if (field === 'lockedInvestment' && newValue > oldValue) {
+            lockedInvestmentDiff = newValue - oldValue;
+          }
+
           if (oldValue !== newValue) {
             changes.push(`${field}: $${oldValue} → $${newValue}`);
             user.balances[field] = newValue;
@@ -377,8 +385,21 @@ export const updateUserByAdmin = async (req, res) => {
       });
     }
 
-    // Save user
+    // Save user first
     await user.save();
+
+    // ✅ INSTANTLY ADD TO ONGOING INVESTMENT IF LOCKED BALANCE WAS INCREASED
+    if (lockedInvestmentDiff > 0) {
+      const activeInvestment = await Investment.findOne({ user: user._id, status: 'active' });
+      if (activeInvestment) {
+        activeInvestment.amount = (activeInvestment.amount || 0) + lockedInvestmentDiff;
+        activeInvestment.interestAmount = (activeInvestment.interestAmount || 0) + lockedInvestmentDiff; // 100% ROI maintained
+        activeInvestment.currentValue = (activeInvestment.currentValue || activeInvestment.amount) + lockedInvestmentDiff;
+        await activeInvestment.save();
+        changes.push(`active_investment_top_up: +$${lockedInvestmentDiff}`);
+        console.log(`✅ Instantly topped up active investment ${activeInvestment._id} by $${lockedInvestmentDiff}`);
+      }
+    }
 
     console.log('✅ User updated successfully');
     console.log('Changes made:', changes.length > 0 ? changes.join(', ') : 'No changes');
@@ -458,7 +479,7 @@ export const deleteUserByAdmin = async (req, res) => {
     
     const [deletedInvestments, deletedDeposits, deletedWithdrawals] = await Promise.all([
       Investment.deleteMany({ user: id }),
-      Deposit.deleteMany({ user: id }), // ✅ CHANGED
+      Deposit.deleteMany({ user: id }),
       Withdrawal.deleteMany({ user: id })
     ]);
 
@@ -518,9 +539,9 @@ export const getDashboardStats = async (req, res) => {
       User.countDocuments(),
       User.countDocuments({ isVerified: true }),
       User.countDocuments({ isVerified: false }),
-      Deposit.countDocuments({ status: 'pending' }), // ✅ CHANGED
+      Deposit.countDocuments({ status: 'pending' }),
       Withdrawal.countDocuments({ status: 'pending' }),
-      Deposit.aggregate([ // ✅ CHANGED
+      Deposit.aggregate([
         { $match: { status: { $in: ['confirmed', 'completed'] } } },
         { $group: { _id: null, total: { $sum: "$amount" } } }
       ]),
@@ -528,7 +549,7 @@ export const getDashboardStats = async (req, res) => {
         { $match: { status: 'completed' } },
         { $group: { _id: null, total: { $sum: "$amount" } } }
       ]),
-      Investment.countDocuments({ status: { $in: ['active', 'claimed', 'auto_renewed'] } }) // ✅ UPDATED
+      Investment.countDocuments({ status: { $in: ['active', 'claimed', 'auto_renewed'] } })
     ]);
 
     const totalDepositVolume = totalDeposits[0]?.total || 0;
@@ -567,10 +588,10 @@ export const getDashboardStats = async (req, res) => {
 // GET /api/admin/dashboard/pending-actions
 export const getPendingActions = async (req, res) => {
   try {
-    console.log("📋 Fetching pending actions...");
+    console.log(" Fetching pending actions...");
 
     const [pendingDeposits, pendingWithdrawals, pendingVerifications] = await Promise.all([
-      Deposit.find({ status: 'pending' }) // ✅ CHANGED from DepositRequest
+      Deposit.find({ status: 'pending' })
         .populate('user', 'email fullName')
         .sort({ createdAt: -1 })
         .limit(50),
@@ -590,17 +611,17 @@ export const getPendingActions = async (req, res) => {
       ...pendingDeposits.map(d => ({
         id: d._id,
         type: 'deposit',
-        user: d.user || { email: d.email, fullName: 'Unknown' }, // ✅ Handle missing populate
+        user: d.user || { email: d.email, fullName: 'Unknown' },
         amount: d.amount,
         currency: d.currency,
         network: d.network,
         status: d.status,
-        createdAt: d.createdAt || d.requestedAt, // ✅ Handle different field names
+        createdAt: d.createdAt || d.requestedAt,
         details: {
           transactionId: d.transactionId || d.txHash,
           paymentMethod: d.paymentMethod,
           email: d.email,
-          screenshotPath: d.screenshotPath // ✅ NEW: Show screenshot info
+          screenshotPath: d.screenshotPath
         }
       })),
       ...pendingWithdrawals.map(w => ({
@@ -608,14 +629,14 @@ export const getPendingActions = async (req, res) => {
         type: 'withdrawal',
         user: w.user,
         amount: w.amount,
-        currency: w.cryptocurrency || w.currency, // ✅ Handle different field names
+        currency: w.cryptocurrency || w.currency,
         status: w.status,
         createdAt: w.requestedAt || w.createdAt,
         details: {
           transactionId: w.transactionId,
           bankName: w.bankName,
           accountNumber: w.accountNumber,
-          walletAddress: w.walletAddress // ✅ NEW
+          walletAddress: w.walletAddress
         }
       })),
       ...pendingVerifications.map(u => ({
@@ -659,7 +680,7 @@ export const getRecentActivities = async (req, res) => {
     console.log("📜 Fetching recent activities...");
 
     const [recentDeposits, recentWithdrawals, recentUsers] = await Promise.all([
-      Deposit.find({}) // ✅ CHANGED
+      Deposit.find({})
         .populate('user', 'email fullName')
         .sort({ createdAt: -1 })
         .limit(20),
@@ -681,9 +702,9 @@ export const getRecentActivities = async (req, res) => {
           : d.status === 'rejected' 
             ? 'deposit_rejected' 
             : 'deposit_pending',
-        user: d.user || { email: d.email, fullName: 'Unknown' }, // ✅ Handle missing populate
+        user: d.user || { email: d.email, fullName: 'Unknown' },
         details: { amount: d.amount, currency: d.currency, email: d.email },
-        timestamp: d.updatedAt || d.completedAt || d.createdAt, // ✅ Handle different timestamps
+        timestamp: d.updatedAt || d.completedAt || d.createdAt,
         success: d.status === 'completed' || d.status === 'confirmed'
       })),
       ...recentWithdrawals.map(w => ({
@@ -763,7 +784,7 @@ export const getAllUsers = async (req, res) => {
     // ✅ Enrich user data with stats
     const enrichedUsers = await Promise.all(users.map(async (user) => {
       const [deposits, withdrawals, investments] = await Promise.all([
-        Deposit.find({ user: user._id }), // ✅ CHANGED
+        Deposit.find({ user: user._id }),
         Withdrawal.find({ user: user._id }),
         Investment.find({ user: user._id })
       ]);
@@ -783,9 +804,9 @@ export const getAllUsers = async (req, res) => {
           totalWithdrawals: completedWithdrawals.length,
           totalWithdrawn: completedWithdrawals.reduce((sum, w) => sum + w.amount, 0)
         },
-        deposits: deposits.slice(0, 5), // Recent 5 deposits
-        withdrawals: withdrawals.slice(0, 5), // Recent 5 withdrawals
-        investments: investments.slice(0, 5) // Recent 5 investments
+        deposits: deposits.slice(0, 5),
+        withdrawals: withdrawals.slice(0, 5),
+        investments: investments.slice(0, 5)
       };
     }));
 
@@ -793,7 +814,7 @@ export const getAllUsers = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      users: enrichedUsers, // ✅ Return enriched data
+      users: enrichedUsers,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -827,7 +848,7 @@ export const getUserDetails = async (req, res) => {
 
     // Fetch all related data
     const [deposits, withdrawals, investments] = await Promise.all([
-      Deposit.find({ user: id }).sort({ createdAt: -1 }).limit(10), // ✅ CHANGED
+      Deposit.find({ user: id }).sort({ createdAt: -1 }).limit(10),
       Withdrawal.find({ user: id }).sort({ createdAt: -1 }).limit(10),
       Investment.find({ user: id }).sort({ investedAt: -1 }).limit(10)
     ]);
@@ -943,7 +964,7 @@ export const handleDepositAction = async (req, res) => {
 
     console.log(`💰 [DEPOSIT ${action?.toUpperCase()}] ID: ${id}`);
 
-    const deposit = await Deposit.findById(id).populate('user', 'email fullName'); // ✅ CHANGED
+    const deposit = await Deposit.findById(id).populate('user', 'email fullName');
     if (!deposit) {
       return res.status(404).json({ success: false, message: "Deposit not found" });
     }
@@ -965,6 +986,7 @@ export const handleDepositAction = async (req, res) => {
       user.balances.lockedInvestment = (user.balances.lockedInvestment || 0) + deposit.amount;
       user.balances.totalDeposited = (user.balances.totalDeposited || 0) + deposit.amount;
       user.balances.totalInvested = (user.balances.totalInvested || 0) + deposit.amount;
+      user.balances.currentInvestmentValue = (user.balances.currentInvestmentValue || 0) + deposit.amount;
       
       // Don't add to available liquidity - it goes directly to locked investment
       await user.save();
@@ -974,53 +996,72 @@ export const handleDepositAction = async (req, res) => {
       deposit.confirmedAt = new Date();
       await deposit.save();
 
-      // ✅ Auto-create investment
-      const startDate = new Date();
-      const expectedEndDate = new Date(startDate);
-      
-      const TESTING_MODE = process.env.NODE_ENV !== 'production';
-      if (TESTING_MODE) {
-        expectedEndDate.setSeconds(expectedEndDate.getSeconds() + (30 * 20));
+      // ✅ INSTANTLY ADD TO ONGOING INVESTMENT OR CREATE NEW ONE
+      const activeInvestment = await Investment.findOne({ user: user._id, status: 'active' });
+
+      if (activeInvestment) {
+        // Seamlessly add to existing active investment without interrupting the cycle
+        activeInvestment.amount = (activeInvestment.amount || 0) + deposit.amount;
+        activeInvestment.interestAmount = (activeInvestment.interestAmount || 0) + deposit.amount; // 100% ROI
+        activeInvestment.currentValue = (activeInvestment.currentValue || activeInvestment.amount) + deposit.amount;
+        await activeInvestment.save();
+
+        deposit.autoInvested = true;
+        deposit.investmentId = activeInvestment._id;
+        await deposit.save();
+        console.log(`✅ Added $${deposit.amount} to existing active investment ${activeInvestment._id}`);
       } else {
-        expectedEndDate.setDate(expectedEndDate.getDate() + 30);
+        // ✅ Auto-create investment (first time deposit)
+        const startDate = new Date();
+        const expectedEndDate = new Date(startDate);
+        
+        const TESTING_MODE = process.env.NODE_ENV !== 'production';
+        if (TESTING_MODE) {
+          expectedEndDate.setSeconds(expectedEndDate.getSeconds() + (30 * 20));
+        } else {
+          expectedEndDate.setDate(expectedEndDate.getDate() + 30);
+        }
+
+        const investment = await Investment.create({
+          user: user._id,
+          email: user.email,
+          assetClass: 'stocks',
+          symbol: 'STOCKS',
+          name: 'Stocks Investment',
+          amount: deposit.amount,
+          interestAmount: deposit.amount, // 100% ROI
+          startDate: startDate,
+          expectedEndDate: expectedEndDate,
+          actualEndDate: expectedEndDate,
+          totalDays: 30,
+          completedDays: 0,
+          missedDays: 0,
+          extensionDays: 0,
+          isComplete: false,
+          dailyTasks: [],
+          interestStatus: 'pending',
+          status: 'active',
+          transactionId: `INV-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+          investedAt: startDate,
+          cycleNumber: 1,
+          parentInvestment: null,
+          isAutoRenewed: false,
+          profitPaidOut: 0,
+          currentValue: deposit.amount,
+          totalInterestEarned: 0
+        });
+
+        deposit.autoInvested = true;
+        deposit.investmentId = investment._id;
+        await deposit.save();
+        console.log(`✅ Created new investment ${investment._id} for $${deposit.amount}`);
       }
 
-      const investment = await Investment.create({
-        user: user._id,
-        email: user.email,
-        assetClass: 'stocks',
-        symbol: 'STOCKS',
-        name: 'Stocks Investment',
-        amount: deposit.amount,
-        interestAmount: deposit.amount, // 100% ROI
-        startDate: startDate,
-        expectedEndDate: expectedEndDate,
-        actualEndDate: expectedEndDate,
-        totalDays: 30,
-        completedDays: 0,
-        missedDays: 0,
-        extensionDays: 0,
-        isComplete: false,
-        dailyTasks: [],
-        interestStatus: 'pending',
-        status: 'active',
-        transactionId: `INV-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-        investedAt: startDate,
-        cycleNumber: 1,
-        parentInvestment: null,
-        isAutoRenewed: false,
-        profitPaidOut: 0
-      });
-
-      deposit.autoInvested = true;
-      deposit.investmentId = investment._id;
-      await deposit.save();
-
-      console.log(`✅ Deposit approved & Investment created: $${deposit.amount} for ${user.email}`);
+      console.log(`✅ Deposit approved & Investment updated: $${deposit.amount} for ${user.email}`);
 
       res.status(200).json({
         success: true,
-        message: `Deposit of $${deposit.amount} approved and investment created`,
+        message: `Deposit of $${deposit.amount} approved and investment updated`,
         deposit: {
           id: deposit._id,
           status: deposit.status,
@@ -1028,13 +1069,14 @@ export const handleDepositAction = async (req, res) => {
           completedAt: deposit.completedAt
         },
         investment: {
-          id: investment._id,
-          amount: investment.amount,
-          expectedEndDate: investment.expectedEndDate
+          id: deposit.investmentId,
+          amount: deposit.amount,
+          expectedEndDate: deposit.expectedEndDate
         },
         userBalance: {
           lockedInvestment: user.balances.lockedInvestment,
-          totalInvested: user.balances.totalInvested
+          totalInvested: user.balances.totalInvested,
+          currentInvestmentValue: user.balances.currentInvestmentValue
         }
       });
 
@@ -1044,7 +1086,7 @@ export const handleDepositAction = async (req, res) => {
       deposit.rejectedAt = new Date();
       await deposit.save();
 
-      console.log(`❌ Deposit rejected: $${deposit.amount}`);
+      console.log(` Deposit rejected: $${deposit.amount}`);
 
       res.status(200).json({
         success: true,
@@ -1210,7 +1252,7 @@ export const verifyUser = async (req, res) => {
 // GET /api/admin/users/export
 export const exportUsersCSV = async (req, res) => {
   try {
-    console.log("📤 Exporting users as CSV...");
+    console.log(" Exporting users as CSV...");
 
     const users = await User.find({})
       .select('email fullName isVerified isAdmin createdAt lastLoginAt balances')
