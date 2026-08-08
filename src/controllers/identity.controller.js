@@ -1,6 +1,6 @@
 import Investment from "../models/Investment.js";
 import User from "../models/User.js";
-import Deposit from "../models/Deposit.js"; // ✅ ADDED: For referral commission calculation
+import Deposit from "../models/Deposit.js";
 import { SURVEY_QUESTION_POOL, SURVEY_METADATA } from "../config/surveyQuestions.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -123,7 +123,7 @@ export const registerUserNode = async (req, res) => {
       referralCode: userReferralCode,
       balances: { 
         availableLiquidity: 0, 
-        lockedInvestment: 0, // ✅ ADDED
+        lockedInvestment: 0,
         totalDeposited: 0, 
         totalWithdrawn: 0, 
         netProfitLoss: 0, 
@@ -292,7 +292,7 @@ export const handleGoogleSignIn = async (req, res) => {
       password: randomPassword,
       balances: { 
         availableLiquidity: 0, 
-        lockedInvestment: 0, // ✅ ADDED
+        lockedInvestment: 0,
         totalDeposited: 0, 
         totalWithdrawn: 0, 
         netProfitLoss: 0, 
@@ -537,22 +537,20 @@ export const getDashboardMetrics = async (req, res) => {
     const user = await getSecureUser(req, res);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // ✅ UPDATED: Include lockedInvestment in total portfolio
-    const totalPortfolio = (user.balances?.availableLiquidity || 0) + 
-                          (user.balances?.lockedInvestment || 0) + 
-                          (user.balances?.currentInvestmentValue || 0);
+    // ✅ FIXED: Total Portfolio ONLY shows available liquidity (prevents double-counting)
+    const totalPortfolio = user.balances?.availableLiquidity || 0;
 
     res.status(200).json({
       success: true,
       balances: {
         availableLiquidity: user.balances?.availableLiquidity || 0,
-        lockedInvestment: user.balances?.lockedInvestment || 0, // ✅ ADDED
+        lockedInvestment: user.balances?.lockedInvestment || 0,
         totalPortfolio,
         netProfitLoss: user.balances?.netProfitLoss || 0,
         totalDeposited: user.balances?.totalDeposited || 0,
         totalWithdrawn: user.balances?.totalWithdrawn || 0,
-        totalInvested: user.balances?.totalInvested || 0, // ✅ ADDED
-        currentInvestmentValue: user.balances?.currentInvestmentValue || 0 // ✅ ADDED
+        totalInvested: user.balances?.totalInvested || 0,
+        currentInvestmentValue: user.balances?.currentInvestmentValue || 0
       },
       allocations: user.balances?.allocations || { stocks: 0, bonds: 0, commodities: 0 },
       user: { id: user._id, email: user.email, fullName: user.fullName, isAdmin: user.isAdmin }
@@ -595,7 +593,6 @@ export const getMyReferralCode = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: Calculate 3% commission from referred users' deposits
 export const getReferralStats = async (req, res) => {
   try {
     const user = await getSecureUser(req, res);
@@ -603,25 +600,21 @@ export const getReferralStats = async (req, res) => {
 
     console.log(`📊 Fetching referral stats for user: ${user.email}`);
 
-    // ✅ Find all users referred by this user
     const referredUsers = await User.find({ 
       'referredBy.id': user._id 
     }).select('fullName email createdAt').sort({ createdAt: -1 });
 
     console.log(`📥 Found ${referredUsers.length} referred users`);
 
-    // ✅ Calculate total earnings from deposits (3% commission)
     let totalEarnings = 0;
     const referralsWithDetails = [];
 
     for (const referredUser of referredUsers) {
-      // Find completed deposits by this referred user
       const deposits = await Deposit.find({
         user: referredUser._id,
         status: { $in: ['completed', 'confirmed'] }
       });
 
-      // Calculate 3% commission from each deposit
       let userEarnings = 0;
       deposits.forEach(deposit => {
         const commission = deposit.amount * 0.03; // 3% commission
@@ -646,7 +639,6 @@ export const getReferralStats = async (req, res) => {
 
     console.log(`💰 Total earnings: $${totalEarnings.toFixed(2)}`);
 
-    // ✅ Update user's referral earnings in database
     if (totalEarnings > 0 && totalEarnings !== (user.balances?.referralEarnings || 0)) {
       user.balances.referralEarnings = totalEarnings;
       await user.save();
@@ -984,18 +976,29 @@ export const verifyDailyCheckIn = async (req, res) => {
     let message = "";
     let rewardReleased = false;
 
+    // ✅ NEW 50/50 PROFIT SPLIT LOGIC FOR DAY 30
     if (investment.completedDays >= investment.totalDays) {
-      const rewardAmount = investment.amount * 2; 
+      const totalProfit = investment.amount; // Since it's 100% ROI, profit equals the principal amount
+      const withdrawableProfit = totalProfit * 0.50;      // 50% available to withdraw
+      const reinvestedProfit = totalProfit * 0.50;        // 50% stays locked for next cycle
+
+      // 1. Add 50% to user's available balance
+      user.balances.availableLiquidity = (user.balances?.availableLiquidity || 0) + withdrawableProfit;
+      user.balances.netProfitLoss = (user.balances?.netProfitLoss || 0) + withdrawableProfit;
       
-      user.balances.availableLiquidity = (user.balances?.availableLiquidity || 0) + rewardAmount;
-      user.balances.netProfitLoss = (user.balances?.netProfitLoss || 0) + investment.amount;
+      // 2. Add 50% to locked investment for the next cycle
+      user.balances.lockedInvestment = (user.balances?.lockedInvestment || 0) + reinvestedProfit;
+      user.balances.totalInvested = (user.balances?.totalInvested || 0) + reinvestedProfit;
+      user.balances.currentInvestmentValue = (user.balances?.currentInvestmentValue || 0) + reinvestedProfit;
+      
       await user.save();
 
       investment.interestStatus = 'claimed';
-      investment.status = 'claimed';
+      investment.status = 'auto_renewed';
       investment.actualEndDate = new Date();
+      investment.profitPaidOut = totalProfit;
       
-      message = `🎉 CONGRATULATIONS! You completed ${investment.totalDays} days! Your reward of $${rewardAmount.toFixed(2)} has been released to your wallet!`;
+      message = `🎉 CONGRATULATIONS! You completed ${investment.totalDays} days! $${withdrawableProfit.toFixed(2)} is now available for withdrawal. $${reinvestedProfit.toFixed(2)} has been reinvested into your next cycle!`;
       rewardReleased = true;
     } else {
       message = `✅ Checked in successfully! Day ${investment.completedDays}/${investment.totalDays} completed. Keep going!`;
@@ -1127,7 +1130,7 @@ export default {
   getDashboardMetrics,
   validateReferralCodeEndpoint,
   getMyReferralCode,
-  getReferralStats, // ✅ UPDATED
+  getReferralStats,
   handleGoogleSignIn,
   checkEmailAvailability,
   getCurrentUser,
