@@ -9,7 +9,6 @@ import jwt from 'jsonwebtoken';
 // ADMIN AUTHENTICATION FUNCTIONS
 // =====================================================
 
-// POST /api/admin/auth/register
 export const registerAdmin = async (req, res) => {
   try {
     const { adminName, email, password } = req.body;
@@ -18,7 +17,6 @@ export const registerAdmin = async (req, res) => {
     console.log('Email:', email);
     console.log('Admin Name:', adminName);
 
-    // Check if admin already exists
     const existingAdmin = await User.findOne({ 
       email: email.toLowerCase().trim(),
       isAdmin: true 
@@ -31,7 +29,6 @@ export const registerAdmin = async (req, res) => {
       });
     }
 
-    // Validate password strength
     if (password.length < 12) {
       return res.status(400).json({
         success: false,
@@ -39,11 +36,9 @@ export const registerAdmin = async (req, res) => {
       });
     }
 
-    // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create admin user
     const admin = await User.create({
       fullName: adminName,
       email: email.toLowerCase().trim(),
@@ -55,7 +50,6 @@ export const registerAdmin = async (req, res) => {
 
     console.log('✅ Admin created:', admin.email);
 
-    // Generate JWT token
     const token = jwt.sign(
       { id: admin._id, isAdmin: true, email: admin.email },
       process.env.JWT_SECRET || 'eraX_secret_key_2024',
@@ -84,14 +78,12 @@ export const registerAdmin = async (req, res) => {
   }
 };
 
-// POST /api/admin/auth/login
 export const loginAdmin = async (req, res) => {
   try {
     const { email, password } = req.body;
 
     console.log('🔑 [ADMIN LOGIN] Email:', email);
 
-    // Find admin user
     const admin = await User.findOne({ 
       email: email.toLowerCase().trim(),
       isAdmin: true 
@@ -104,7 +96,6 @@ export const loginAdmin = async (req, res) => {
       });
     }
 
-    // Verify password
     const isPasswordValid = await bcrypt.compare(password, admin.password);
 
     if (!isPasswordValid) {
@@ -114,12 +105,10 @@ export const loginAdmin = async (req, res) => {
       });
     }
 
-    // Update last login
     admin.lastLoginAt = new Date();
     admin.lastIp = req.ip || req.connection.remoteAddress;
     await admin.save();
 
-    // Generate JWT token
     const token = jwt.sign(
       { id: admin._id, isAdmin: true, email: admin.email },
       process.env.JWT_SECRET || 'eraX_secret_key_2024',
@@ -155,7 +144,6 @@ export const loginAdmin = async (req, res) => {
 // USER MANAGEMENT CRUD FUNCTIONS
 // =====================================================
 
-// POST /api/admin/auth/users - CREATE USER
 export const createUserByAdmin = async (req, res) => {
   try {
     const { email, password, fullName, isAdmin = false, isVerified = true } = req.body;
@@ -166,7 +154,6 @@ export const createUserByAdmin = async (req, res) => {
     console.log('Full Name:', fullName);
     console.log('='.repeat(60));
 
-    // Validate required fields
     if (!email || !password || !fullName) {
       return res.status(400).json({
         success: false,
@@ -174,7 +161,6 @@ export const createUserByAdmin = async (req, res) => {
       });
     }
 
-    // Validate password strength
     if (password.length < 8) {
       return res.status(400).json({
         success: false,
@@ -182,10 +168,9 @@ export const createUserByAdmin = async (req, res) => {
       });
     }
 
-    // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
     if (existingUser) {
-      console.log('️ User already exists:', email);
+      console.log('⚠️ User already exists:', email);
       return res.status(400).json({
         success: false,
         message: 'User already exists with this email',
@@ -193,11 +178,9 @@ export const createUserByAdmin = async (req, res) => {
       });
     }
 
-    // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Generate unique referral code
     let userReferralCode = `ERAX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
     let referralCodeExists = await User.findOne({ referralCode: userReferralCode });
     while (referralCodeExists) {
@@ -205,7 +188,6 @@ export const createUserByAdmin = async (req, res) => {
       referralCodeExists = await User.findOne({ referralCode: userReferralCode });
     }
 
-    // Create user
     const user = await User.create({
       email: email.toLowerCase().trim(),
       password: hashedPassword,
@@ -269,7 +251,7 @@ export const createUserByAdmin = async (req, res) => {
   }
 };
 
-// PUT /api/admin/auth/users/:id - UPDATE USER
+// ✅ UPDATED: updateUserByAdmin with proper investment top-up logic
 export const updateUserByAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -288,7 +270,6 @@ export const updateUserByAdmin = async (req, res) => {
     console.log('✏️ [ADMIN UPDATE USER] ID:', id);
     console.log('='.repeat(60));
 
-    // Find user
     const user = await User.findById(id);
     if (!user) {
       console.log('❌ User not found:', id);
@@ -298,17 +279,14 @@ export const updateUserByAdmin = async (req, res) => {
       });
     }
 
-    // Track changes for logging
     const changes = [];
 
-    // Update personal information
     if (fullName !== undefined && fullName !== user.fullName) {
       changes.push(`fullName: ${user.fullName} → ${fullName}`);
       user.fullName = fullName;
     }
     
     if (email !== undefined && email.toLowerCase().trim() !== user.email) {
-      // Check if new email is already in use
       const existingEmail = await User.findOne({ 
         email: email.toLowerCase().trim(),
         _id: { $ne: id }
@@ -335,7 +313,6 @@ export const updateUserByAdmin = async (req, res) => {
       user.location = location;
     }
 
-    // Update account settings
     if (isAdmin !== undefined && isAdmin !== user.isAdmin) {
       changes.push(`isAdmin: ${user.isAdmin} → ${isAdmin}`);
       user.isAdmin = isAdmin;
@@ -352,10 +329,9 @@ export const updateUserByAdmin = async (req, res) => {
       user.twoStep = twoStep;
     }
 
-    // ✅ NEW: Track difference in locked investment to instantly top-up ongoing investment
     let lockedInvestmentDiff = 0;
+    let oldLockedInvestment = user.balances?.lockedInvestment || 0;
 
-    // Update financial balances
     if (balances && typeof balances === 'object') {
       const balanceFields = [
         'availableLiquidity',
@@ -372,9 +348,9 @@ export const updateUserByAdmin = async (req, res) => {
           const oldValue = user.balances[field] || 0;
           const newValue = parseFloat(balances[field]) || 0;
           
-          // ✅ Track if locked investment was manually increased by admin
           if (field === 'lockedInvestment' && newValue > oldValue) {
             lockedInvestmentDiff = newValue - oldValue;
+            oldLockedInvestment = oldValue;
           }
 
           if (oldValue !== newValue) {
@@ -385,19 +361,52 @@ export const updateUserByAdmin = async (req, res) => {
       });
     }
 
-    // Save user first
     await user.save();
+    console.log('✅ User saved with new balances');
 
-    // ✅ INSTANTLY ADD TO ONGOING INVESTMENT IF LOCKED BALANCE WAS INCREASED
     if (lockedInvestmentDiff > 0) {
-      const activeInvestment = await Investment.findOne({ user: user._id, status: 'active' });
+      console.log(` Looking for active investment for user ${user.email}...`);
+      
+      const activeInvestment = await Investment.findOne({ 
+        user: user._id, 
+        status: 'active',
+        interestStatus: { $ne: 'claimed' }
+      }).sort({ investedAt: -1 });
+
       if (activeInvestment) {
-        activeInvestment.amount = (activeInvestment.amount || 0) + lockedInvestmentDiff;
-        activeInvestment.interestAmount = (activeInvestment.interestAmount || 0) + lockedInvestmentDiff; // 100% ROI maintained
-        activeInvestment.currentValue = (activeInvestment.currentValue || activeInvestment.amount) + lockedInvestmentDiff;
+        console.log(`✅ Found active investment: ${activeInvestment._id}`);
+        console.log(`   Old principal: $${activeInvestment.amount}`);
+        console.log(`   Adding: $${lockedInvestmentDiff}`);
+        
+        const newPrincipal = (activeInvestment.amount || 0) + lockedInvestmentDiff;
+        const newInterestAmount = newPrincipal;
+        const daysCompleted = activeInvestment.completedDays || 0;
+        const dailyInterestRate = activeInvestment.dailyInterestRate || 3.333;
+        
+        const dailyInterest = newPrincipal * (dailyInterestRate / 100);
+        const totalInterestEarned = dailyInterest * daysCompleted;
+        const newCurrentValue = newPrincipal + totalInterestEarned;
+        
+        activeInvestment.amount = newPrincipal;
+        activeInvestment.interestAmount = newInterestAmount;
+        activeInvestment.currentValue = newCurrentValue;
+        activeInvestment.totalInterestEarned = totalInterestEarned;
+        
         await activeInvestment.save();
+        
         changes.push(`active_investment_top_up: +$${lockedInvestmentDiff}`);
-        console.log(`✅ Instantly topped up active investment ${activeInvestment._id} by $${lockedInvestmentDiff}`);
+        changes.push(`new_principal: $${newPrincipal}`);
+        changes.push(`new_current_value: $${newCurrentValue.toFixed(2)}`);
+        
+        console.log(`✅ Investment updated:`);
+        console.log(`   New principal: $${newPrincipal}`);
+        console.log(`   Days completed: ${daysCompleted}`);
+        console.log(`   Daily interest: $${dailyInterest.toFixed(2)}`);
+        console.log(`   Total interest earned: $${totalInterestEarned.toFixed(2)}`);
+        console.log(`   New current value: $${newCurrentValue.toFixed(2)}`);
+      } else {
+        console.log(`⚠️ No active investment found for user ${user.email}`);
+        console.log(`   The added funds will remain in lockedInvestment balance`);
       }
     }
 
@@ -439,42 +448,37 @@ export const updateUserByAdmin = async (req, res) => {
   }
 };
 
-// DELETE /api/admin/auth/users/:id - DELETE USER
 export const deleteUserByAdmin = async (req, res) => {
   try {
     const { id } = req.params;
 
     console.log('\n' + '='.repeat(60));
-    console.log('🗑️ [ADMIN DELETE USER] ID:', id);
+    console.log('️ [ADMIN DELETE USER] ID:', id);
     console.log('='.repeat(60));
 
-    // Find user
     const user = await User.findById(id);
     if (!user) {
-      console.log('❌ User not found:', id);
+      console.log(' User not found:', id);
       return res.status(404).json({
         success: false,
         message: 'User not found'
       });
     }
 
-    // Prevent admin from deleting themselves
     if (req.admin && req.admin.id === id) {
-      console.log('⚠️ Admin attempted to delete themselves');
+      console.log('️ Admin attempted to delete themselves');
       return res.status(400).json({
         success: false,
         message: 'You cannot delete your own account'
       });
     }
 
-    // Store user info for response
     const userInfo = {
       id: user._id,
       email: user.email,
       fullName: user.fullName
     };
 
-    // Delete all related data
     console.log('🔄 Deleting related data...');
     
     const [deletedInvestments, deletedDeposits, deletedWithdrawals] = await Promise.all([
@@ -487,7 +491,6 @@ export const deleteUserByAdmin = async (req, res) => {
     console.log('✅ Deleted deposits:', deletedDeposits.deletedCount);
     console.log('✅ Deleted withdrawals:', deletedWithdrawals.deletedCount);
 
-    // Delete user
     await User.findByIdAndDelete(id);
 
     console.log('✅ User deleted successfully');
@@ -521,7 +524,6 @@ export const deleteUserByAdmin = async (req, res) => {
 // DASHBOARD FUNCTIONS
 // =====================================================
 
-// GET /api/admin/dashboard/stats
 export const getDashboardStats = async (req, res) => {
   try {
     console.log("📊 Fetching dashboard stats...");
@@ -585,10 +587,9 @@ export const getDashboardStats = async (req, res) => {
   }
 };
 
-// GET /api/admin/dashboard/pending-actions
 export const getPendingActions = async (req, res) => {
   try {
-    console.log(" Fetching pending actions...");
+    console.log("📋 Fetching pending actions...");
 
     const [pendingDeposits, pendingWithdrawals, pendingVerifications] = await Promise.all([
       Deposit.find({ status: 'pending' })
@@ -674,7 +675,6 @@ export const getPendingActions = async (req, res) => {
   }
 };
 
-// GET /api/admin/dashboard/activities
 export const getRecentActivities = async (req, res) => {
   try {
     console.log("📜 Fetching recent activities...");
@@ -754,7 +754,6 @@ export const getRecentActivities = async (req, res) => {
 // USER MANAGEMENT FUNCTIONS
 // =====================================================
 
-// GET /api/admin/users
 export const getAllUsers = async (req, res) => {
   try {
     console.log("👥 Fetching all users...");
@@ -781,7 +780,6 @@ export const getAllUsers = async (req, res) => {
       User.countDocuments(query)
     ]);
 
-    // ✅ Enrich user data with stats
     const enrichedUsers = await Promise.all(users.map(async (user) => {
       const [deposits, withdrawals, investments] = await Promise.all([
         Deposit.find({ user: user._id }),
@@ -834,19 +832,17 @@ export const getAllUsers = async (req, res) => {
   }
 };
 
-// GET /api/admin/users/:id - Get single user with full details
 export const getUserDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    console.log(`👤 [GET USER DETAILS] ID: ${id}`);
+    console.log(` [GET USER DETAILS] ID: ${id}`);
 
     const user = await User.findById(id).select('-password -otp -otpExpires');
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Fetch all related data
     const [deposits, withdrawals, investments] = await Promise.all([
       Deposit.find({ user: id }).sort({ createdAt: -1 }).limit(10),
       Withdrawal.find({ user: id }).sort({ createdAt: -1 }).limit(10),
@@ -899,13 +895,12 @@ export const getUserDetails = async (req, res) => {
   }
 };
 
-// PATCH /api/admin/users/:id/status
 export const toggleUserStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, isVerified, isAdmin } = req.body;
 
-    console.log(`👤 [TOGGLE USER] ID: ${id}`);
+    console.log(` [TOGGLE USER] ID: ${id}`);
 
     const user = await User.findById(id);
     if (!user) {
@@ -956,7 +951,6 @@ export const toggleUserStatus = async (req, res) => {
 // DEPOSIT & WITHDRAWAL FUNCTIONS
 // =====================================================
 
-// POST /api/admin/deposit/:id
 export const handleDepositAction = async (req, res) => {
   try {
     const { id } = req.params;
@@ -982,13 +976,10 @@ export const handleDepositAction = async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found" });
       }
 
-      // ✅ Add to locked investment (perpetual model)
       user.balances.lockedInvestment = (user.balances.lockedInvestment || 0) + deposit.amount;
       user.balances.totalDeposited = (user.balances.totalDeposited || 0) + deposit.amount;
       user.balances.totalInvested = (user.balances.totalInvested || 0) + deposit.amount;
       user.balances.currentInvestmentValue = (user.balances.currentInvestmentValue || 0) + deposit.amount;
-      
-      // Don't add to available liquidity - it goes directly to locked investment
       await user.save();
 
       deposit.status = 'completed';
@@ -996,22 +987,18 @@ export const handleDepositAction = async (req, res) => {
       deposit.confirmedAt = new Date();
       await deposit.save();
 
-      // ✅ INSTANTLY ADD TO ONGOING INVESTMENT OR CREATE NEW ONE
       const activeInvestment = await Investment.findOne({ user: user._id, status: 'active' });
 
       if (activeInvestment) {
-        // Seamlessly add to existing active investment without interrupting the cycle
         activeInvestment.amount = (activeInvestment.amount || 0) + deposit.amount;
-        activeInvestment.interestAmount = (activeInvestment.interestAmount || 0) + deposit.amount; // 100% ROI
+        activeInvestment.interestAmount = (activeInvestment.interestAmount || 0) + deposit.amount;
         activeInvestment.currentValue = (activeInvestment.currentValue || activeInvestment.amount) + deposit.amount;
         await activeInvestment.save();
 
         deposit.autoInvested = true;
         deposit.investmentId = activeInvestment._id;
         await deposit.save();
-        console.log(`✅ Added $${deposit.amount} to existing active investment ${activeInvestment._id}`);
       } else {
-        // ✅ Auto-create investment (first time deposit)
         const startDate = new Date();
         const expectedEndDate = new Date(startDate);
         
@@ -1029,7 +1016,7 @@ export const handleDepositAction = async (req, res) => {
           symbol: 'STOCKS',
           name: 'Stocks Investment',
           amount: deposit.amount,
-          interestAmount: deposit.amount, // 100% ROI
+          interestAmount: deposit.amount,
           startDate: startDate,
           expectedEndDate: expectedEndDate,
           actualEndDate: expectedEndDate,
@@ -1054,7 +1041,6 @@ export const handleDepositAction = async (req, res) => {
         deposit.autoInvested = true;
         deposit.investmentId = investment._id;
         await deposit.save();
-        console.log(`✅ Created new investment ${investment._id} for $${deposit.amount}`);
       }
 
       console.log(`✅ Deposit approved & Investment updated: $${deposit.amount} for ${user.email}`);
@@ -1086,7 +1072,7 @@ export const handleDepositAction = async (req, res) => {
       deposit.rejectedAt = new Date();
       await deposit.save();
 
-      console.log(` Deposit rejected: $${deposit.amount}`);
+      console.log(`❌ Deposit rejected: $${deposit.amount}`);
 
       res.status(200).json({
         success: true,
@@ -1116,7 +1102,6 @@ export const handleDepositAction = async (req, res) => {
   }
 };
 
-// POST /api/admin/withdrawal/:id
 export const handleWithdrawalAction = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1206,7 +1191,6 @@ export const handleWithdrawalAction = async (req, res) => {
   }
 };
 
-// POST /api/admin/users/:id/verify
 export const verifyUser = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1249,10 +1233,9 @@ export const verifyUser = async (req, res) => {
 // EXPORT FUNCTIONS
 // =====================================================
 
-// GET /api/admin/users/export
 export const exportUsersCSV = async (req, res) => {
   try {
-    console.log(" Exporting users as CSV...");
+    console.log("📤 Exporting users as CSV...");
 
     const users = await User.find({})
       .select('email fullName isVerified isAdmin createdAt lastLoginAt balances')
