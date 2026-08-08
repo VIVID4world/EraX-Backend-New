@@ -251,7 +251,7 @@ export const createUserByAdmin = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: updateUserByAdmin with direct principal sync logic
+// ✅ UPDATED: updateUserByAdmin with EXTENSIVE logging for debugging
 export const updateUserByAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -268,84 +268,45 @@ export const updateUserByAdmin = async (req, res) => {
 
     console.log('\n' + '='.repeat(60));
     console.log('✏️ [ADMIN UPDATE USER] ID:', id);
+    console.log('Request body balances:', balances);
     console.log('='.repeat(60));
 
     const user = await User.findById(id);
     if (!user) {
       console.log('❌ User not found:', id);
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     const changes = [];
 
+    // Update personal info
     if (fullName !== undefined && fullName !== user.fullName) {
-      changes.push(`fullName: ${user.fullName} → ${fullName}`);
+      changes.push(`fullName`);
       user.fullName = fullName;
     }
-    
     if (email !== undefined && email.toLowerCase().trim() !== user.email) {
-      const existingEmail = await User.findOne({ 
-        email: email.toLowerCase().trim(),
-        _id: { $ne: id }
-      });
-      
-      if (existingEmail) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email already in use by another user'
-        });
-      }
-      
-      changes.push(`email: ${user.email} → ${email}`);
+      const existingEmail = await User.findOne({ email: email.toLowerCase().trim(), _id: { $ne: id } });
+      if (existingEmail) return res.status(400).json({ success: false, message: 'Email already in use' });
+      changes.push(`email`);
       user.email = email.toLowerCase().trim();
     }
-    
-    if (phone !== undefined) {
-      changes.push(`phone: ${user.phone} → ${phone}`);
-      user.phone = phone;
-    }
-    
-    if (location !== undefined) {
-      changes.push(`location: ${user.location} → ${location}`);
-      user.location = location;
-    }
-
-    if (isAdmin !== undefined && isAdmin !== user.isAdmin) {
-      changes.push(`isAdmin: ${user.isAdmin} → ${isAdmin}`);
-      user.isAdmin = isAdmin;
-    }
-    
+    if (phone !== undefined) { changes.push(`phone`); user.phone = phone; }
+    if (location !== undefined) { changes.push(`location`); user.location = location; }
+    if (isAdmin !== undefined && isAdmin !== user.isAdmin) { changes.push(`isAdmin`); user.isAdmin = isAdmin; }
     if (isVerified !== undefined && isVerified !== user.isVerified) {
-      changes.push(`isVerified: ${user.isVerified} → ${isVerified}`);
+      changes.push(`isVerified`);
       user.isVerified = isVerified;
       user.verifiedAt = isVerified ? new Date() : null;
     }
-    
-    if (twoStep !== undefined && twoStep !== user.twoStep) {
-      changes.push(`twoStep: ${user.twoStep} → ${twoStep}`);
-      user.twoStep = twoStep;
-    }
+    if (twoStep !== undefined && twoStep !== user.twoStep) { changes.push(`twoStep`); user.twoStep = twoStep; }
 
-    // Update financial balances
+    // Update balances
     if (balances && typeof balances === 'object') {
-      const balanceFields = [
-        'availableLiquidity',
-        'lockedInvestment',
-        'totalDeposited',
-        'totalWithdrawn',
-        'netProfitLoss',
-        'totalInvested',
-        'currentInvestmentValue'
-      ];
-
+      const balanceFields = ['availableLiquidity', 'lockedInvestment', 'totalDeposited', 'totalWithdrawn', 'netProfitLoss', 'totalInvested', 'currentInvestmentValue'];
       balanceFields.forEach(field => {
         if (balances[field] !== undefined) {
           const oldValue = user.balances[field] || 0;
           const newValue = parseFloat(balances[field]) || 0;
-          
           if (oldValue !== newValue) {
             changes.push(`${field}: $${oldValue} → $${newValue}`);
             user.balances[field] = newValue;
@@ -354,84 +315,76 @@ export const updateUserByAdmin = async (req, res) => {
       });
     }
 
-    // Save user first
     await user.save();
-    console.log('✅ User saved with new balances');
+    console.log('✅ User saved. New lockedInvestment:', user.balances.lockedInvestment);
 
-    // ✅ NEW LOGIC: Directly sync the active investment principal with the "Locked Investment" balance
-    if (balances && balances.lockedInvestment !== undefined) {
-      const newLockedAmount = parseFloat(balances.lockedInvestment) || 0;
+    // ✅ CRITICAL: Sync investment principal with lockedInvestment
+    const newLockedAmount = user.balances.lockedInvestment || 0;
+    
+    console.log('🔍 Searching for active investment...');
+    console.log('User ID:', user._id);
+    
+    // Try multiple query approaches
+    const activeInvestment = await Investment.findOne({
+      user: user._id,
+      status: { $in: ['active', 'pending'] }
+    }).sort({ createdAt: -1 });
+
+    if (activeInvestment) {
+      console.log('✅ Found investment:', activeInvestment._id);
+      console.log('   Current amount:', activeInvestment.amount);
+      console.log('   Target amount:', newLockedAmount);
       
-      // Find the active investment
-      const activeInvestment = await Investment.findOne({ 
-        user: user._id, 
-        status: 'active',
-        interestStatus: { $ne: 'claimed' }
-      });
-
-      if (activeInvestment) {
-        const oldInvestmentAmount = activeInvestment.amount || 0;
+      if (activeInvestment.amount !== newLockedAmount) {
+        console.log('🔄 Updating investment...');
         
-        // If the admin changed the locked investment amount, update the investment principal to match exactly
-        if (oldInvestmentAmount !== newLockedAmount) {
-          console.log(`🔄 Syncing investment principal: $${oldInvestmentAmount} → $${newLockedAmount}`);
-          
-          activeInvestment.amount = newLockedAmount;
-          activeInvestment.interestAmount = newLockedAmount; // 100% ROI target
-          
-          // Recalculate current value based on the new principal and days already completed
-          const daysCompleted = activeInvestment.completedDays || 0;
-          const dailyRate = activeInvestment.dailyInterestRate || 3.333;
-          const dailyInterest = newLockedAmount * (dailyRate / 100);
-          const totalInterestEarned = dailyInterest * daysCompleted;
-          
-          activeInvestment.currentValue = newLockedAmount + totalInterestEarned;
-          activeInvestment.totalInterestEarned = totalInterestEarned;
-          
-          await activeInvestment.save();
-          changes.push(`investment_principal_synced: $${newLockedAmount}`);
-          console.log(`✅ Investment ${activeInvestment._id} updated. New Current Value: $${activeInvestment.currentValue.toFixed(2)}`);
-        }
+        activeInvestment.amount = newLockedAmount;
+        activeInvestment.interestAmount = newLockedAmount;
+        
+        const daysCompleted = activeInvestment.completedDays || 0;
+        const dailyRate = activeInvestment.dailyInterestRate || 3.333;
+        const dailyInterest = newLockedAmount * (dailyRate / 100);
+        const totalInterestEarned = dailyInterest * daysCompleted;
+        
+        activeInvestment.currentValue = newLockedAmount + totalInterestEarned;
+        activeInvestment.totalInterestEarned = totalInterestEarned;
+        
+        await activeInvestment.save();
+        
+        console.log('✅ Investment updated!');
+        console.log('   New amount:', activeInvestment.amount);
+        console.log('   New currentValue:', activeInvestment.currentValue);
+        console.log('   Days completed:', daysCompleted);
+        console.log('   Total interest:', totalInterestEarned);
+        
+        changes.push(`investment_synced: $${newLockedAmount}`);
       } else {
-        console.log('⚠️ No active investment found to sync with lockedInvestment balance.');
+        console.log('⚠️ Investment amount already matches target');
       }
+    } else {
+      console.log('⚠️ No active investment found!');
+      console.log('   Checking all investments for this user...');
+      
+      const allInvestments = await Investment.find({ user: user._id });
+      console.log('   Total investments found:', allInvestments.length);
+      allInvestments.forEach(inv => {
+        console.log(`   - ID: ${inv._id}, Status: ${inv.status}, Amount: $${inv.amount}`);
+      });
     }
 
-    console.log('✅ User updated successfully');
-    console.log('Changes made:', changes.length > 0 ? changes.join(', ') : 'No changes');
+    console.log('Changes:', changes);
     console.log('='.repeat(60) + '\n');
 
     res.status(200).json({
       success: true,
       message: 'User updated successfully',
-      user: {
-        id: user._id,
-        email: user.email,
-        fullName: user.fullName,
-        isAdmin: user.isAdmin,
-        isVerified: user.isVerified,
-        balances: user.balances
-      },
+      user: { id: user._id, email: user.email, fullName: user.fullName, balances: user.balances },
       changesMade: changes
     });
 
   } catch (error) {
-    console.error('\n❌ UPDATE USER ERROR:', error);
-    console.error('Error stack:', error.stack);
-    
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Duplicate field detected',
-        code: 'DUPLICATE_KEY'
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update user',
-      error: error.message
-    });
+    console.error('❌ UPDATE ERROR:', error);
+    res.status(500).json({ success: false, message: 'Failed to update user', error: error.message });
   }
 };
 
@@ -440,7 +393,7 @@ export const deleteUserByAdmin = async (req, res) => {
     const { id } = req.params;
 
     console.log('\n' + '='.repeat(60));
-    console.log('🗑️ [ADMIN DELETE USER] ID:', id);
+    console.log('️ [ADMIN DELETE USER] ID:', id);
     console.log('='.repeat(60));
 
     const user = await User.findById(id);
@@ -1251,7 +1204,7 @@ export const exportUsersCSV = async (req, res) => {
     res.status(200).send(csv);
 
   } catch (error) {
-    console.error(" EXPORT CSV ERROR:", error);
+    console.error("❌ EXPORT CSV ERROR:", error);
     res.status(500).json({
       success: false,
       message: "Failed to export users",
