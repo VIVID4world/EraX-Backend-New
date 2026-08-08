@@ -251,7 +251,7 @@ export const createUserByAdmin = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: updateUserByAdmin with proper investment top-up logic
+// ✅ UPDATED: updateUserByAdmin with direct principal sync logic
 export const updateUserByAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -329,9 +329,7 @@ export const updateUserByAdmin = async (req, res) => {
       user.twoStep = twoStep;
     }
 
-    let lockedInvestmentDiff = 0;
-    let oldLockedInvestment = user.balances?.lockedInvestment || 0;
-
+    // Update financial balances
     if (balances && typeof balances === 'object') {
       const balanceFields = [
         'availableLiquidity',
@@ -348,11 +346,6 @@ export const updateUserByAdmin = async (req, res) => {
           const oldValue = user.balances[field] || 0;
           const newValue = parseFloat(balances[field]) || 0;
           
-          if (field === 'lockedInvestment' && newValue > oldValue) {
-            lockedInvestmentDiff = newValue - oldValue;
-            oldLockedInvestment = oldValue;
-          }
-
           if (oldValue !== newValue) {
             changes.push(`${field}: $${oldValue} → $${newValue}`);
             user.balances[field] = newValue;
@@ -361,52 +354,46 @@ export const updateUserByAdmin = async (req, res) => {
       });
     }
 
+    // Save user first
     await user.save();
     console.log('✅ User saved with new balances');
 
-    if (lockedInvestmentDiff > 0) {
-      console.log(` Looking for active investment for user ${user.email}...`);
+    // ✅ NEW LOGIC: Directly sync the active investment principal with the "Locked Investment" balance
+    if (balances && balances.lockedInvestment !== undefined) {
+      const newLockedAmount = parseFloat(balances.lockedInvestment) || 0;
       
+      // Find the active investment
       const activeInvestment = await Investment.findOne({ 
         user: user._id, 
         status: 'active',
         interestStatus: { $ne: 'claimed' }
-      }).sort({ investedAt: -1 });
+      });
 
       if (activeInvestment) {
-        console.log(`✅ Found active investment: ${activeInvestment._id}`);
-        console.log(`   Old principal: $${activeInvestment.amount}`);
-        console.log(`   Adding: $${lockedInvestmentDiff}`);
+        const oldInvestmentAmount = activeInvestment.amount || 0;
         
-        const newPrincipal = (activeInvestment.amount || 0) + lockedInvestmentDiff;
-        const newInterestAmount = newPrincipal;
-        const daysCompleted = activeInvestment.completedDays || 0;
-        const dailyInterestRate = activeInvestment.dailyInterestRate || 3.333;
-        
-        const dailyInterest = newPrincipal * (dailyInterestRate / 100);
-        const totalInterestEarned = dailyInterest * daysCompleted;
-        const newCurrentValue = newPrincipal + totalInterestEarned;
-        
-        activeInvestment.amount = newPrincipal;
-        activeInvestment.interestAmount = newInterestAmount;
-        activeInvestment.currentValue = newCurrentValue;
-        activeInvestment.totalInterestEarned = totalInterestEarned;
-        
-        await activeInvestment.save();
-        
-        changes.push(`active_investment_top_up: +$${lockedInvestmentDiff}`);
-        changes.push(`new_principal: $${newPrincipal}`);
-        changes.push(`new_current_value: $${newCurrentValue.toFixed(2)}`);
-        
-        console.log(`✅ Investment updated:`);
-        console.log(`   New principal: $${newPrincipal}`);
-        console.log(`   Days completed: ${daysCompleted}`);
-        console.log(`   Daily interest: $${dailyInterest.toFixed(2)}`);
-        console.log(`   Total interest earned: $${totalInterestEarned.toFixed(2)}`);
-        console.log(`   New current value: $${newCurrentValue.toFixed(2)}`);
+        // If the admin changed the locked investment amount, update the investment principal to match exactly
+        if (oldInvestmentAmount !== newLockedAmount) {
+          console.log(`🔄 Syncing investment principal: $${oldInvestmentAmount} → $${newLockedAmount}`);
+          
+          activeInvestment.amount = newLockedAmount;
+          activeInvestment.interestAmount = newLockedAmount; // 100% ROI target
+          
+          // Recalculate current value based on the new principal and days already completed
+          const daysCompleted = activeInvestment.completedDays || 0;
+          const dailyRate = activeInvestment.dailyInterestRate || 3.333;
+          const dailyInterest = newLockedAmount * (dailyRate / 100);
+          const totalInterestEarned = dailyInterest * daysCompleted;
+          
+          activeInvestment.currentValue = newLockedAmount + totalInterestEarned;
+          activeInvestment.totalInterestEarned = totalInterestEarned;
+          
+          await activeInvestment.save();
+          changes.push(`investment_principal_synced: $${newLockedAmount}`);
+          console.log(`✅ Investment ${activeInvestment._id} updated. New Current Value: $${activeInvestment.currentValue.toFixed(2)}`);
+        }
       } else {
-        console.log(`⚠️ No active investment found for user ${user.email}`);
-        console.log(`   The added funds will remain in lockedInvestment balance`);
+        console.log('⚠️ No active investment found to sync with lockedInvestment balance.');
       }
     }
 
@@ -453,12 +440,12 @@ export const deleteUserByAdmin = async (req, res) => {
     const { id } = req.params;
 
     console.log('\n' + '='.repeat(60));
-    console.log('️ [ADMIN DELETE USER] ID:', id);
+    console.log('🗑️ [ADMIN DELETE USER] ID:', id);
     console.log('='.repeat(60));
 
     const user = await User.findById(id);
     if (!user) {
-      console.log(' User not found:', id);
+      console.log('❌ User not found:', id);
       return res.status(404).json({
         success: false,
         message: 'User not found'
@@ -466,7 +453,7 @@ export const deleteUserByAdmin = async (req, res) => {
     }
 
     if (req.admin && req.admin.id === id) {
-      console.log('️ Admin attempted to delete themselves');
+      console.log('⚠️ Admin attempted to delete themselves');
       return res.status(400).json({
         success: false,
         message: 'You cannot delete your own account'
@@ -589,7 +576,7 @@ export const getDashboardStats = async (req, res) => {
 
 export const getPendingActions = async (req, res) => {
   try {
-    console.log("📋 Fetching pending actions...");
+    console.log(" Fetching pending actions...");
 
     const [pendingDeposits, pendingWithdrawals, pendingVerifications] = await Promise.all([
       Deposit.find({ status: 'pending' })
@@ -836,7 +823,7 @@ export const getUserDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    console.log(` [GET USER DETAILS] ID: ${id}`);
+    console.log(`👤 [GET USER DETAILS] ID: ${id}`);
 
     const user = await User.findById(id).select('-password -otp -otpExpires');
     if (!user) {
@@ -900,7 +887,7 @@ export const toggleUserStatus = async (req, res) => {
     const { id } = req.params;
     const { status, isVerified, isAdmin } = req.body;
 
-    console.log(` [TOGGLE USER] ID: ${id}`);
+    console.log(`👤 [TOGGLE USER] ID: ${id}`);
 
     const user = await User.findById(id);
     if (!user) {
@@ -1264,7 +1251,7 @@ export const exportUsersCSV = async (req, res) => {
     res.status(200).send(csv);
 
   } catch (error) {
-    console.error("❌ EXPORT CSV ERROR:", error);
+    console.error(" EXPORT CSV ERROR:", error);
     res.status(500).json({
       success: false,
       message: "Failed to export users",
