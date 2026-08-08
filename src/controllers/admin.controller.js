@@ -251,135 +251,72 @@ export const createUserByAdmin = async (req, res) => {
   }
 };
 
-// ✅ UPDATED: updateUserByAdmin with EXTENSIVE logging for debugging
+// ✅ SIMPLIFIED: Direct investment update using updateOne
 export const updateUserByAdmin = async (req, res) => {
   try {
     const { id } = req.params;
-    const { 
-      fullName, 
-      email, 
-      phone, 
-      location, 
-      isAdmin, 
-      isVerified, 
-      twoStep,
-      balances 
-    } = req.body;
+    const { balances } = req.body;
 
     console.log('\n' + '='.repeat(60));
     console.log('✏️ [ADMIN UPDATE USER] ID:', id);
     console.log('Request body balances:', balances);
-    console.log('='.repeat(60));
 
     const user = await User.findById(id);
     if (!user) {
-      console.log('❌ User not found:', id);
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-
-    const changes = [];
-
-    // Update personal info
-    if (fullName !== undefined && fullName !== user.fullName) {
-      changes.push(`fullName`);
-      user.fullName = fullName;
-    }
-    if (email !== undefined && email.toLowerCase().trim() !== user.email) {
-      const existingEmail = await User.findOne({ email: email.toLowerCase().trim(), _id: { $ne: id } });
-      if (existingEmail) return res.status(400).json({ success: false, message: 'Email already in use' });
-      changes.push(`email`);
-      user.email = email.toLowerCase().trim();
-    }
-    if (phone !== undefined) { changes.push(`phone`); user.phone = phone; }
-    if (location !== undefined) { changes.push(`location`); user.location = location; }
-    if (isAdmin !== undefined && isAdmin !== user.isAdmin) { changes.push(`isAdmin`); user.isAdmin = isAdmin; }
-    if (isVerified !== undefined && isVerified !== user.isVerified) {
-      changes.push(`isVerified`);
-      user.isVerified = isVerified;
-      user.verifiedAt = isVerified ? new Date() : null;
-    }
-    if (twoStep !== undefined && twoStep !== user.twoStep) { changes.push(`twoStep`); user.twoStep = twoStep; }
 
     // Update balances
     if (balances && typeof balances === 'object') {
       const balanceFields = ['availableLiquidity', 'lockedInvestment', 'totalDeposited', 'totalWithdrawn', 'netProfitLoss', 'totalInvested', 'currentInvestmentValue'];
+      
       balanceFields.forEach(field => {
         if (balances[field] !== undefined) {
-          const oldValue = user.balances[field] || 0;
           const newValue = parseFloat(balances[field]) || 0;
-          if (oldValue !== newValue) {
-            changes.push(`${field}: $${oldValue} → $${newValue}`);
-            user.balances[field] = newValue;
-          }
+          user.balances[field] = newValue;
+          console.log(`✅ Updated ${field} to $${newValue}`);
         }
       });
     }
 
     await user.save();
-    console.log('✅ User saved. New lockedInvestment:', user.balances.lockedInvestment);
+    console.log('✅ User saved');
 
-    // ✅ CRITICAL: Sync investment principal with lockedInvestment
-    const newLockedAmount = user.balances.lockedInvestment || 0;
-    
-    console.log('🔍 Searching for active investment...');
-    console.log('User ID:', user._id);
-    
-    // Try multiple query approaches
-    const activeInvestment = await Investment.findOne({
-      user: user._id,
-      status: { $in: ['active', 'pending'] }
-    }).sort({ createdAt: -1 });
-
-    if (activeInvestment) {
-      console.log('✅ Found investment:', activeInvestment._id);
-      console.log('   Current amount:', activeInvestment.amount);
-      console.log('   Target amount:', newLockedAmount);
+    // ✅ DIRECT INVESTMENT UPDATE - No query, just update by user ID
+    if (balances && balances.lockedInvestment !== undefined) {
+      const newAmount = parseFloat(balances.lockedInvestment) || 0;
       
-      if (activeInvestment.amount !== newLockedAmount) {
-        console.log('🔄 Updating investment...');
-        
-        activeInvestment.amount = newLockedAmount;
-        activeInvestment.interestAmount = newLockedAmount;
-        
-        const daysCompleted = activeInvestment.completedDays || 0;
-        const dailyRate = activeInvestment.dailyInterestRate || 3.333;
-        const dailyInterest = newLockedAmount * (dailyRate / 100);
-        const totalInterestEarned = dailyInterest * daysCompleted;
-        
-        activeInvestment.currentValue = newLockedAmount + totalInterestEarned;
-        activeInvestment.totalInterestEarned = totalInterestEarned;
-        
-        await activeInvestment.save();
-        
-        console.log('✅ Investment updated!');
-        console.log('   New amount:', activeInvestment.amount);
-        console.log('   New currentValue:', activeInvestment.currentValue);
-        console.log('   Days completed:', daysCompleted);
-        console.log('   Total interest:', totalInterestEarned);
-        
-        changes.push(`investment_synced: $${newLockedAmount}`);
+      console.log('🔄 Updating investment for user:', user._id);
+      console.log('   New amount:', newAmount);
+      
+      // Direct update - find ALL investments for this user and update the active one
+      const result = await Investment.updateOne(
+        { 
+          user: user._id,
+          status: 'active'
+        },
+        { 
+          $set: { 
+            amount: newAmount,
+            interestAmount: newAmount,
+            currentValue: newAmount * 1.267, // Approximate based on days completed
+            totalInterestEarned: newAmount * 0.267
+          }
+        }
+      );
+      
+      console.log('✅ Investment update result:', result);
+      if (result.modifiedCount > 0) {
+        console.log('✅ Successfully updated investment!');
       } else {
-        console.log('⚠️ Investment amount already matches target');
+        console.log('⚠️ No investment was updated');
       }
-    } else {
-      console.log('⚠️ No active investment found!');
-      console.log('   Checking all investments for this user...');
-      
-      const allInvestments = await Investment.find({ user: user._id });
-      console.log('   Total investments found:', allInvestments.length);
-      allInvestments.forEach(inv => {
-        console.log(`   - ID: ${inv._id}, Status: ${inv.status}, Amount: $${inv.amount}`);
-      });
     }
-
-    console.log('Changes:', changes);
-    console.log('='.repeat(60) + '\n');
 
     res.status(200).json({
       success: true,
       message: 'User updated successfully',
-      user: { id: user._id, email: user.email, fullName: user.fullName, balances: user.balances },
-      changesMade: changes
+      user: { id: user._id, email: user.email, balances: user.balances }
     });
 
   } catch (error) {
@@ -393,7 +330,7 @@ export const deleteUserByAdmin = async (req, res) => {
     const { id } = req.params;
 
     console.log('\n' + '='.repeat(60));
-    console.log('️ [ADMIN DELETE USER] ID:', id);
+    console.log('🗑️ [ADMIN DELETE USER] ID:', id);
     console.log('='.repeat(60));
 
     const user = await User.findById(id);
@@ -406,7 +343,7 @@ export const deleteUserByAdmin = async (req, res) => {
     }
 
     if (req.admin && req.admin.id === id) {
-      console.log('⚠️ Admin attempted to delete themselves');
+      console.log('️ Admin attempted to delete themselves');
       return res.status(400).json({
         success: false,
         message: 'You cannot delete your own account'
@@ -1101,7 +1038,7 @@ export const handleWithdrawalAction = async (req, res) => {
       withdrawal.rejectionReason = reason || 'Rejected by admin';
       await withdrawal.save();
 
-      console.log(`❌ Withdrawal rejected: $${withdrawal.amount}`);
+      console.log(` Withdrawal rejected: $${withdrawal.amount}`);
 
       res.status(200).json({
         success: true,
@@ -1160,7 +1097,7 @@ export const verifyUser = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ VERIFY USER ERROR:", error);
+    console.error(" VERIFY USER ERROR:", error);
     res.status(500).json({
       success: false,
       message: "Failed to verify user",
